@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>X 回复清理助手 · 设置</title>
+  <style>
+    body {
+      max-width: 560px;
+      margin: 40px auto;
+      padding: 0 16px;
+      font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #0f1419;
+      background: #fff;
+    }
+    h1 { font-size: 20px; margin-bottom: 4px; }
+    p.note { color: #536471; margin-top: 0; }
+    label { display: block; margin-top: 16px; font-weight: 600; }
+    input, select, textarea {
+      box-sizing: border-box;
+      width: 100%;
+      margin-top: 6px;
+      padding: 8px 10px;
+      border: 1px solid #cfd9de;
+      border-radius: 8px;
+      font: inherit;
+    }
+    textarea { min-height: 220px; font: 12px/1.5 ui-monospace, Menlo, monospace; }
+    small { display: block; margin-top: 4px; color: #536471; }
+    a { color: #1d9bf0; }
+    button {
+      margin-top: 12px;
+      padding: 6px 16px;
+      border: 1px solid #cfd9de;
+      border-radius: 999px;
+      background: #fff;
+      color: #0f1419;
+      font: 600 13px inherit;
+      cursor: pointer;
+    }
+    button.primary { border-color: #1d9bf0; background: #1d9bf0; color: #fff; }
+    button:disabled { opacity: .6; cursor: default; }
+    .result { display: inline-block; margin-left: 10px; font-weight: 600; }
+    .result.ok { color: #00ba7c; }
+    .result.error { color: #e0245e; }
+    label.check { display: flex; align-items: center; gap: 8px; margin-top: 20px; }
+    label.check input { width: auto; margin: 0; }
+    details { margin-top: 28px; border-top: 1px solid #eff3f4; padding-top: 12px; }
+    summary { cursor: pointer; color: #536471; font-weight: 600; }
+    [hidden] { display: none !important; }
+    #status { display: block; min-height: 22px; margin-top: 16px; color: #00ba7c; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>X 回复清理助手</h1>
+  <p class="note">选好服务商，填上 API Key，点「测试连接」就能用了。Key 只保存在本机浏览器。</p>
+
+  <label for="provider">服务商</label>
+  <select id="provider"></select>
+
+  <div id="baseUrlRow" hidden>
+    <label for="customBaseUrl">接口地址</label>
+    <input id="customBaseUrl" type="url" placeholder="https://example.com/v1">
+    <small>填到 /v1 为止，插件会请求 {地址}/chat/completions。测试连接时浏览器会请你授权访问这个地址。</small>
+  </div>
+
+  <label for="apiKey" id="apiKeyLabel">API Key</label>
+  <input id="apiKey" type="password" autocomplete="off">
+  <small id="keyLinkRow">没有 Key？<a id="keyLink" target="_blank" rel="noopener">去获取</a></small>
+
+  <button id="test" class="primary" type="button">测试连接</button><span id="testResult" class="result"></span>
+
+  <label class="check"><input id="autoScanOwn" type="checkbox"> 自己的评论区自动检测</label>
+  <small>打开自己推文的详情页时自动分析回复。别人的评论区和个人主页点右下角按钮分析。</small>
+  <small id="usage">今天已自动分析 0 条。</small>
+
+  <span id="status"></span>
+
+  <details>
+    <summary>高级设置（一般不用改）</summary>
+
+    <label for="model">模型名</label>
+    <input id="model" type="text">
+    <small id="modelHint"></small>
+
+    <label for="maxReplies">每次最多分析的条数</label>
+    <input id="maxReplies" type="number" min="1" max="50">
+
+    <label for="dailyAutoLimit">每天自动分析上限（条）</label>
+    <input id="dailyAutoLimit" type="number" min="0" max="5000">
+    <small>手动点击扫描不受此上限限制。</small>
+
+    <label for="customRepliesPrompt">判断标准：评论区回复</label>
+    <textarea id="customRepliesPrompt" spellcheck="false"></textarea>
+    <small>输出格式（JSON、0–100 分）由插件自动追加，这里只写判断标准。</small>
+    <button type="button" data-reset="customRepliesPrompt">恢复默认</button>
+
+    <label for="customPostsPrompt">判断标准：个人主页推文</label>
+    <textarea id="customPostsPrompt" spellcheck="false"></textarea>
+    <button type="button" data-reset="customPostsPrompt">恢复默认</button>
+  </details>
+
+  <script src="providers.js"></script>
+  <script src="prompt.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>
