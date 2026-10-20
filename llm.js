@@ -1,7 +1,7 @@
 // 大模型调用层：读取设置、请求模型、解析结果。依赖 providers.js。
 
 const DEFAULT_SETTINGS = {
-  provider: "deepseek",
+  provider: "grok",
   apiKeys: {}, // 服务商 id → Key，切换服务商时互不覆盖
   models: {}, // 服务商 id → 自定义模型名，留空用默认
   customBaseUrl: "",
@@ -19,7 +19,7 @@ const REQUEST_TIMEOUT = 60000;
 const ANTHROPIC_FALLBACK_MODELS = /^claude-(opus-5|fable-5|sonnet-5-5)/;
 
 async function loadSettings() {
-  const stored = await chrome.storage.local.get([...Object.keys(DEFAULT_SETTINGS), ...LEGACY_KEYS]);
+  const stored = await chrome.storage.local.get([...Object.keys(DEFAULT_SETTINGS), ...LEGACY_KEYS, "grokAuth"]);
   const raw = { ...DEFAULT_SETTINGS, ...stored };
   const providerId = normalizeProviderId(raw.provider);
   const provider = PROVIDERS[providerId];
@@ -29,10 +29,12 @@ async function loadSettings() {
   if (raw.apiKey && !apiKeys[providerId]) apiKeys[providerId] = raw.apiKey;
   if (raw.model && !models[providerId]) models[providerId] = raw.model;
   const customBaseUrl = raw.customBaseUrl || (providerId === "custom" ? raw.baseUrl || "" : "");
+  const grokAuth = raw.grokAuth;
 
   return {
     providerId,
     api: provider.api,
+    grokSignedIn: Boolean(grokAuth?.accessToken && grokAuth?.refreshToken),
     temperature: provider.temperature ?? null,
     jsonMode: Boolean(provider.jsonMode),
     apiKey: (apiKeys[providerId] || "").trim(),
@@ -46,6 +48,11 @@ async function loadSettings() {
 }
 
 function missingConfig(settings) {
+  if (settings.api === "grok") {
+    if (!settings.grokSignedIn) return "请先在设置页用 X 订阅登录 Grok";
+    if (!settings.model) return "请先在设置页填写模型名";
+    return null;
+  }
   if (!settings.apiKey) return "请先在设置页填写 API Key";
   if (!settings.baseUrl) return "请先在设置页填写接口地址";
   if (!settings.model) return "请先在设置页填写模型名";
@@ -65,8 +72,13 @@ async function fetchWithTimeout(url, init) {
   }
 }
 
-async function throwHttpError(response) {
+async function throwHttpError(response, api) {
   const detail = await response.text().catch(() => "");
+  if (api === "grok" && (response.status === 401 || response.status === 403)) {
+    throw new Error("Grok 登录失效，或当前订阅不能用这个接口。请在设置页重新登录。");
+  }
+  if (api === "grok" && response.status === 402) throw new Error("Grok 订阅额度不可用或已用完");
+  if (response.status === 426) throw new Error("Grok 客户端版本过旧，需要更新插件");
   if (response.status === 401 || response.status === 403) throw new Error("API Key 无效或没有权限");
   if (response.status === 402) throw new Error("API 余额不足");
   if (response.status === 404) throw new Error("接口地址或模型名不对（404）");
@@ -94,7 +106,7 @@ async function requestChatCompletion(settings, systemPrompt, userMessage) {
     },
     body: JSON.stringify(body)
   });
-  if (!response.ok) await throwHttpError(response);
+  if (!response.ok) await throwHttpError(response, "openai");
 
   const data = await response.json();
   const content = data.choices?.[0]?.message?.content;
@@ -129,7 +141,7 @@ async function requestAnthropicMessage(settings, systemPrompt, userMessage) {
     headers,
     body: JSON.stringify(body)
   });
-  if (!response.ok) await throwHttpError(response);
+  if (!response.ok) await throwHttpError(response, "anthropic");
 
   const data = await response.json();
   if (data.stop_reason === "refusal") throw new Error("模型拒绝了这次请求");
@@ -141,8 +153,46 @@ async function requestAnthropicMessage(settings, systemPrompt, userMessage) {
   return text;
 }
 
+function responseText(data) {
+  if (typeof data.output_text === "string" && data.output_text) return data.output_text;
+  const chunks = [];
+  for (const item of data.output || []) {
+    for (const part of item.content || []) {
+      if (part.text) chunks.push(part.text);
+    }
+  }
+  return chunks.join("");
+}
+
+// Grok 订阅走 Responses 接口。身份头是代理用来识别订阅客户端的。
+async function requestGrokResponse(settings, systemPrompt, userMessage) {
+  const accessToken = await getGrokAccessToken();
+  const response = await fetchWithTimeout(GROK_PROXY.responsesUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      Authorization: `Bearer ${accessToken}`,
+      ...GROK_PROXY.headers
+    },
+    body: JSON.stringify({
+      model: settings.model,
+      store: false,
+      input: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userMessage }
+      ]
+    })
+  });
+  if (!response.ok) await throwHttpError(response, "grok");
+  const text = responseText(await response.json());
+  if (!text) throw new Error("模型没有返回内容");
+  return text;
+}
+
 // 返回模型输出的原始文本。
 async function requestCompletion(settings, systemPrompt, userMessage) {
+  if (settings.api === "grok") return requestGrokResponse(settings, systemPrompt, userMessage);
   if (settings.api === "anthropic") {
     return requestAnthropicMessage(settings, systemPrompt, userMessage);
   }

@@ -2,6 +2,14 @@
 // api：openai 为 Chat Completions 兼容接口，anthropic 为 Claude Messages API。
 
 const PROVIDERS = {
+  grok: {
+    label: "Grok（X 订阅）",
+    api: "grok",
+    baseUrl: "https://cli-chat-proxy.grok.com/v1",
+    model: "grok-4.5",
+    modelHint: "走 X 订阅里的 Grok 额度。留空使用 grok-4.5。",
+    keyUrl: ""
+  },
   deepseek: {
     label: "DeepSeek",
     api: "openai",
@@ -52,7 +60,7 @@ const LEGACY_PROVIDER_IDS = { "openai-compatible": "custom" };
 
 function normalizeProviderId(id) {
   const mapped = LEGACY_PROVIDER_IDS[id] || id;
-  return PROVIDERS[mapped] ? mapped : "deepseek";
+  return PROVIDERS[mapped] ? mapped : "grok";
 }
 
 // 自定义地址需要运行时授权的来源，例如 https://example.com/*。

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "X 回复清理助手",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "识别推文下的 AI 自动回复，并一键隐藏回复、屏蔽账号。",
   "permissions": [
     "activeTab",
@@ -11,6 +11,8 @@
   "host_permissions": [
     "https://x.com/*",
     "https://twitter.com/*",
+    "https://auth.x.ai/*",
+    "https://cli-chat-proxy.grok.com/*",
     "https://api.deepseek.com/*",
     "https://api.openai.com/*",
     "https://api.anthropic.com/*",

@@ -52,7 +52,7 @@
 </head>
 <body>
   <h1>X 回复清理助手</h1>
-  <p class="note">选好服务商，填上 API Key，点「测试连接」就能用了。Key 只保存在本机浏览器。</p>
+  <p class="note">默认用 X 订阅里的 Grok 额度。登录后点「测试连接」。其他服务商的 Key 只保存在本机浏览器。</p>
 
   <label for="provider">服务商</label>
   <select id="provider"></select>
@@ -63,9 +63,19 @@
     <small>填到 /v1 为止，插件会请求 {地址}/chat/completions。测试连接时浏览器会请你授权访问这个地址。</small>
   </div>
 
-  <label for="apiKey" id="apiKeyLabel">API Key</label>
-  <input id="apiKey" type="password" autocomplete="off">
-  <small id="keyLinkRow">没有 Key？<a id="keyLink" target="_blank" rel="noopener">去获取</a></small>
+  <div id="grokRow" hidden>
+    <p class="note">登录后，识别请求走 Grok 订阅额度，不调用 DeepSeek。</p>
+    <button id="grokLogin" class="primary" type="button">用 X 订阅登录 Grok</button>
+    <button id="grokLogout" type="button" hidden>退出登录</button>
+    <p id="grokCodeLine" hidden>在打开的页面输入验证码：<strong id="grokCode"></strong></p>
+    <p id="grokStatus" class="note"></p>
+  </div>
+
+  <div id="apiKeyRow">
+    <label for="apiKey" id="apiKeyLabel">API Key</label>
+    <input id="apiKey" type="password" autocomplete="off">
+    <small id="keyLinkRow">没有 Key？<a id="keyLink" target="_blank" rel="noopener">去获取</a></small>
+  </div>
 
   <button id="test" class="primary" type="button">测试连接</button><span id="testResult" class="result"></span>
 

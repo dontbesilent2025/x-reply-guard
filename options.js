@@ -1,7 +1,7 @@
 // 设置页：改动即保存。依赖 providers.js 与 prompt.js。
 
 const DEFAULTS = {
-  provider: "deepseek",
+  provider: "grok",
   apiKeys: {},
   models: {},
   customBaseUrl: "",
@@ -43,14 +43,16 @@ function flashStatus(text) {
 async function save(patch) {
   state = { ...state, ...patch };
   await chrome.storage.local.set(patch);
-  flashStatus(state.apiKeys[state.provider] ? "✓ 已保存" : "已保存，还需要填 API Key");
+  const ready = state.provider === "grok" ? state.grokSignedIn : state.apiKeys[state.provider];
+  flashStatus(ready ? "✓ 已保存" : state.provider === "grok" ? "已保存，还需要登录 Grok" : "已保存，还需要填 API Key");
 }
 
 // 把 0.1 早期版本的单个 Key 迁移到按服务商分开的结构。
 async function loadState() {
-  const stored = await chrome.storage.local.get([...Object.keys(DEFAULTS), ...LEGACY_KEYS]);
+  const stored = await chrome.storage.local.get([...Object.keys(DEFAULTS), ...LEGACY_KEYS, "grokAuth"]);
   state = { ...DEFAULTS, ...stored };
   state.provider = normalizeProviderId(state.provider);
+  state.grokSignedIn = Boolean(stored.grokAuth?.accessToken && stored.grokAuth?.refreshToken);
   state.apiKeys = { ...state.apiKeys };
   state.models = { ...state.models };
 
@@ -70,11 +72,20 @@ async function loadState() {
   }
 }
 
+function renderGrok() {
+  const grok = state.provider === "grok";
+  $("grokRow").hidden = !grok;
+  $("apiKeyRow").hidden = grok;
+  $("grokLogout").hidden = !state.grokSignedIn;
+  $("grokStatus").textContent = state.grokSignedIn ? "已登录，识别会使用订阅里的 Grok 额度。" : "还没有登录。";
+}
+
 function renderProvider() {
   const provider = PROVIDERS[state.provider];
   $("provider").value = state.provider;
   $("baseUrlRow").hidden = state.provider !== "custom";
   $("customBaseUrl").value = state.customBaseUrl;
+  renderGrok();
   $("apiKeyLabel").textContent = `${provider.label} API Key`;
   $("apiKey").value = state.apiKeys[state.provider] || "";
   $("keyLinkRow").hidden = !provider.keyUrl;
@@ -167,6 +178,63 @@ function bindEvents() {
   });
 
   $("test").addEventListener("click", testConnection);
+  $("grokLogin").addEventListener("click", loginGrok);
+  $("grokLogout").addEventListener("click", logoutGrok);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function loginGrok() {
+  const button = $("grokLogin");
+  const status = $("grokStatus");
+  button.disabled = true;
+  status.textContent = "正在打开登录…";
+  try {
+    let start;
+    try {
+      start = await chrome.runtime.sendMessage({ type: "GROK_LOGIN_START" });
+    } catch (error) {
+      throw new Error("扩展后台没有响应。请在 chrome://extensions 刷新「X 回复清理助手」，再重新打开这个设置页。");
+    }
+    if (!start?.ok) {
+      throw new Error(start?.error || "扩展后台没有响应。请在 chrome://extensions 刷新「X 回复清理助手」，再重新打开这个设置页。");
+    }
+    $("grokCode").textContent = start.userCode;
+    $("grokCodeLine").hidden = false;
+    if (start.verificationUrl) chrome.tabs.create({ url: start.verificationUrl });
+    status.textContent = "请在打开的页面完成登录。";
+
+    let interval = Math.max(1, Number(start.interval) || 5) * 1000;
+    const deadline = Date.now() + (Number(start.expiresIn) || 600) * 1000;
+    while (Date.now() < deadline) {
+      await sleep(interval);
+      const poll = await chrome.runtime.sendMessage({ type: "GROK_LOGIN_POLL", deviceCode: start.deviceCode });
+      if (poll?.status === "success") {
+        state.grokSignedIn = true;
+        $("grokCodeLine").hidden = true;
+        renderGrok();
+        flashStatus("✓ 已登录 Grok");
+        return;
+      }
+      if (poll?.status === "slow_down") interval = Math.min(30000, interval + 5000);
+      if (poll?.status === "error" || poll?.ok === false) throw new Error(poll?.error || "登录失败");
+    }
+    throw new Error("登录超时，请重试");
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function logoutGrok() {
+  await chrome.runtime.sendMessage({ type: "GROK_LOGOUT" });
+  state.grokSignedIn = false;
+  $("grokCodeLine").hidden = true;
+  renderGrok();
+  flashStatus("已退出 Grok 登录");
 }
 
 async function init() {

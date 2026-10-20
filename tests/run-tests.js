@@ -7,7 +7,7 @@ const path = require("path");
 const vm = require("vm");
 
 const ROOT = path.join(__dirname, "..");
-const SOURCES = ["providers.js", "prompt.js", "llm.js", "store.js", "background.js"];
+const SOURCES = ["providers.js", "prompt.js", "grok-auth.js", "llm.js", "store.js", "background.js"];
 
 function createExtension({ storage = {}, grantedOrigins = [] } = {}) {
   const store = JSON.parse(JSON.stringify(storage));
@@ -48,7 +48,18 @@ function createExtension({ storage = {}, grantedOrigins = [] } = {}) {
     };
   }
 
-  const context = { chrome, fetch, URL, AbortController, setTimeout, clearTimeout, console, importScripts() {} };
+  const context = {
+    chrome,
+    fetch,
+    URL,
+    URLSearchParams,
+    atob: globalThis.atob,
+    AbortController,
+    setTimeout,
+    clearTimeout,
+    console,
+    importScripts() {}
+  };
   vm.createContext(context);
   const code = SOURCES.map((file) => fs.readFileSync(path.join(ROOT, file), "utf8")).join("\n");
   vm.runInContext(
@@ -69,13 +80,17 @@ function createExtension({ storage = {}, grantedOrigins = [] } = {}) {
 // 按请求里的条目 id 生成假结果，兼容两种接口格式。
 function echoScores(score = 50) {
   return (request) => {
-    const userText = request.body.messages.find((message) => message.role === "user").content;
+    const userMessage = request.body.messages
+      ? request.body.messages.find((message) => message.role === "user")
+      : request.body.input.find((message) => message.role === "user");
+    const userText = userMessage.content;
     const input = JSON.parse(userText);
     const items = input.replies || input.posts;
     const text = JSON.stringify({ results: items.map((item) => ({ id: item.id, score, signals: [], reason: "测试" })) });
     if (request.url.endsWith("/v1/messages")) {
       return { body: { stop_reason: "end_turn", content: [{ type: "thinking", thinking: "" }, { type: "text", text }] } };
     }
+    if (request.url.endsWith("/responses")) return { body: { output_text: text } };
     return { body: { choices: [{ message: { content: text } }] } };
   };
 }
@@ -107,14 +122,14 @@ test("旧版单个 apiKey 自动当作当前服务商的 Key", async () => {
 });
 
 test("lookup 只查缓存，不调用 API", async () => {
-  const ext = createExtension({ storage: { apiKeys: { deepseek: "k" } } });
+  const ext = createExtension({ storage: { provider: "deepseek", apiKeys: { deepseek: "k" } } });
   const result = await ext.api.analyzeItems("replies", PARENT, replies(1, 3), "lookup");
   assert.equal(result.results.length, 0);
   assert.equal(ext.requests.length, 0);
 });
 
 test("单次最多分析 maxReplies 条，第二次只发未缓存的", async () => {
-  const ext = createExtension({ storage: { apiKeys: { deepseek: "k" } } });
+  const ext = createExtension({ storage: { provider: "deepseek", apiKeys: { deepseek: "k" } } });
   ext.respondWith(echoScores());
   let result = await ext.api.analyzeItems("replies", PARENT, replies(1, 25), "auto");
   assert.equal(result.analyzed, 20);
@@ -126,7 +141,7 @@ test("单次最多分析 maxReplies 条，第二次只发未缓存的", async ()
 });
 
 test("每日上限截断自动分析，手动不受限制也不计数", async () => {
-  const ext = createExtension({ storage: { apiKeys: { deepseek: "k" }, dailyAutoLimit: 3 } });
+  const ext = createExtension({ storage: { provider: "deepseek", apiKeys: { deepseek: "k" }, dailyAutoLimit: 3 } });
   ext.respondWith(echoScores());
   let result = await ext.api.analyzeItems("replies", PARENT, replies(1, 5), "auto");
   assert.equal(result.batchIds.length, 3);
@@ -139,7 +154,7 @@ test("每日上限截断自动分析，手动不受限制也不计数", async ()
 
 test("跨天后自动分析计数归零", async () => {
   const ext = createExtension({
-    storage: { apiKeys: { deepseek: "k" }, dailyAutoLimit: 3, autoUsage: { date: "2000-01-01", count: 99 } }
+    storage: { provider: "deepseek", apiKeys: { deepseek: "k" }, dailyAutoLimit: 3, autoUsage: { date: "2000-01-01", count: 99 } }
   });
   ext.respondWith(echoScores());
   const result = await ext.api.analyzeItems("replies", PARENT, replies(1, 2), "auto");
@@ -148,7 +163,7 @@ test("跨天后自动分析计数归零", async () => {
 });
 
 test("关闭自动检测后 auto 不调用 API", async () => {
-  const ext = createExtension({ storage: { apiKeys: { deepseek: "k" }, autoScanOwn: false } });
+  const ext = createExtension({ storage: { provider: "deepseek", apiKeys: { deepseek: "k" }, autoScanOwn: false } });
   const result = await ext.api.analyzeItems("replies", PARENT, replies(1, 2), "auto");
   assert.equal(result.autoDisabled, true);
   assert.equal(ext.requests.length, 0);
@@ -164,7 +179,7 @@ test("缓存 7 天后过期", async () => {
 });
 
 test("主页推文使用推文版提示词", async () => {
-  const ext = createExtension({ storage: { apiKeys: { deepseek: "k" } } });
+  const ext = createExtension({ storage: { provider: "deepseek", apiKeys: { deepseek: "k" } } });
   ext.respondWith(echoScores(80));
   const result = await ext.api.analyzeItems("posts", { author: "someone" }, replies(1, 2), "manual");
   assert.equal(result.analyzed, 2);
@@ -172,7 +187,7 @@ test("主页推文使用推文版提示词", async () => {
 });
 
 test("自定义判断标准替换默认标准，输出格式仍然追加", async () => {
-  const ext = createExtension({ storage: { apiKeys: { deepseek: "k" }, customRepliesPrompt: "只看是否有 emoji。" } });
+  const ext = createExtension({ storage: { provider: "deepseek", apiKeys: { deepseek: "k" }, customRepliesPrompt: "只看是否有 emoji。" } });
   ext.respondWith(echoScores());
   await ext.api.analyzeItems("replies", PARENT, replies(1, 1), "manual");
   const system = ext.requests[0].body.messages[0].content;
@@ -182,7 +197,7 @@ test("自定义判断标准替换默认标准，输出格式仍然追加", async
 });
 
 test("DeepSeek 请求带温度 0 和 JSON 模式", async () => {
-  const ext = createExtension({ storage: { apiKeys: { deepseek: "k" } } });
+  const ext = createExtension({ storage: { provider: "deepseek", apiKeys: { deepseek: "k" } } });
   ext.respondWith(echoScores());
   await ext.api.analyzeItems("replies", PARENT, replies(1, 1), "manual");
   const request = ext.requests[0];
@@ -268,7 +283,7 @@ test("自定义地址授权后可以使用，且不强制 JSON 模式", async ()
 });
 
 test("HTTP 错误转换成中文提示", async () => {
-  const ext = createExtension({ storage: { apiKeys: { deepseek: "k" } } });
+  const ext = createExtension({ storage: { provider: "deepseek", apiKeys: { deepseek: "k" } } });
   ext.respondWith(() => ({ status: 402 }));
   const result = await ext.api.analyzeItems("replies", PARENT, replies(1, 2), "manual");
   assert.equal(result.ok, false);
@@ -277,12 +292,46 @@ test("HTTP 错误转换成中文提示", async () => {
 });
 
 test("测试连接：成功时返回模型名，且不写入缓存", async () => {
-  const ext = createExtension({ storage: { apiKeys: { deepseek: "k" } } });
+  const ext = createExtension({ storage: { provider: "deepseek", apiKeys: { deepseek: "k" } } });
   ext.respondWith(echoScores());
   const result = await ext.api.testConnection();
   assert.equal(result.ok, true);
   assert.equal(result.model, "deepseek-flash");
   assert.ok(!ext.store.scoreCache);
+});
+
+function fakeJwt() {
+  const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
+  const payload = Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64url");
+  return `${header}.${payload}.sig`;
+}
+
+test("没登录 Grok 时不调用 API", async () => {
+  const ext = createExtension({ storage: { provider: "grok" } });
+  const result = await ext.api.analyzeItems("replies", PARENT, replies(1, 1), "manual");
+  assert.equal(result.needsConfig, true);
+  assert.equal(ext.requests.length, 0);
+});
+
+test("Grok 订阅请求走代理，并带上订阅客户端身份", async () => {
+  const token = fakeJwt();
+  const ext = createExtension({
+    storage: {
+      provider: "grok",
+      grokAuth: { accessToken: token, refreshToken: "refresh-token", expiresAt: Date.now() + 3600000 }
+    }
+  });
+  ext.respondWith(echoScores());
+  const result = await ext.api.analyzeItems("replies", PARENT, replies(1, 1), "manual");
+  const request = ext.requests[0];
+  assert.equal(result.analyzed, 1);
+  assert.equal(request.url, "https://cli-chat-proxy.grok.com/v1/responses");
+  assert.equal(request.headers["x-xai-token-auth"], "xai-grok-cli");
+  assert.equal(request.headers["x-grok-client-identifier"], "grok-shell");
+  assert.equal(request.body.model, "grok-4.5");
+  assert.equal(request.body.store, false);
+  assert.equal(request.headers.Authorization, `Bearer ${token}`);
+  assert.equal(ext.requests.length, 1);
 });
 
 test("解析结果：分数截断到 0–100，丢弃缺 id 的条目，容忍前后多余文字", async () => {

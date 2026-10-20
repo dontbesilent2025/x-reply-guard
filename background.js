@@ -1,4 +1,4 @@
-importScripts("providers.js", "prompt.js", "llm.js", "store.js");
+importScripts("providers.js", "prompt.js", "grok-auth.js", "llm.js", "store.js");
 
 const BADGE_CLEAR_DELAY = 2500;
 
@@ -119,6 +119,30 @@ async function testConnection() {
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === "GROK_STATUS") {
+    readGrokAuth().then((auth) => sendResponse({ ok: true, signedIn: Boolean(auth) }));
+    return true;
+  }
+
+  if (message?.type === "GROK_LOGIN_START") {
+    startGrokLogin()
+      .then(sendResponse)
+      .catch((error) => sendResponse({ ok: false, error: error.message || "无法开始登录" }));
+    return true;
+  }
+
+  if (message?.type === "GROK_LOGIN_POLL") {
+    pollGrokLogin(message.deviceCode)
+      .then(sendResponse)
+      .catch((error) => sendResponse({ ok: false, status: "error", error: error.message || "登录失败" }));
+    return true;
+  }
+
+  if (message?.type === "GROK_LOGOUT") {
+    clearGrokAuth().then(() => sendResponse({ ok: true }));
+    return true;
+  }
+
   if (message?.type === "TEST_CONNECTION") {
     testConnection().then(sendResponse);
     return true;
