@@ -100,6 +100,8 @@
       text: articleText(mainArticle)
     };
     memory.parentTime = articleTime(mainArticle);
+    // 编辑过的推文，时间链接里的 id 可能与地址栏不同；标签按前者挂。
+    memory.postId = articleStatusId(mainArticle) || mainId;
     // 排在主帖上方的是它回复的上级推文，不算回复。
     for (const article of articles) {
       if (article.compareDocumentPosition(mainArticle) & Node.DOCUMENT_POSITION_FOLLOWING) {
@@ -123,6 +125,7 @@
       : threadMemory.get(mainId) || {
           parent: { author: pathAuthorHandle(), text: "" },
           parentTime: null,
+          postId: mainId,
           ancestorIds: new Set()
         };
 
@@ -155,7 +158,7 @@
       });
     }
 
-    return { parent: memory.parent, replies };
+    return { parent: memory.parent, postId: memory.postId, replies };
   }
 
   const RESERVED_PATHS = new Set([
@@ -192,11 +195,15 @@
       const thread = collectThread();
       if (!thread) return null;
       const ownHandle = loggedInHandle();
+      const own = Boolean(ownHandle && thread.parent.author === ownHandle);
       return {
         kind: "replies",
         context: thread.parent,
         items: thread.replies,
-        own: Boolean(ownHandle && thread.parent.author === ownHandle)
+        own,
+        // 别人推文的主帖正文也要检测；自己的主帖和纯图片主帖跳过。
+        mainPost:
+          !own && thread.parent.text ? { id: thread.postId, text: thread.parent.text } : null
       };
     }
 
@@ -360,7 +367,7 @@
       page.own &&
       !autoPausedReason &&
       unscored.some((item) => (autoAttempts.get(item.id) || 0) < MAX_AUTO_ATTEMPTS);
-    const needsLookup = unscored.some((item) => !lookedUp.has(item.id));
+    const needsLookup = lookupCandidates(page).length > 0;
     if (!needsAuto && !needsLookup) return;
 
     queueTimer = setTimeout(runQueued, needsAuto ? AUTO_DELAY : LOOKUP_DELAY);
@@ -386,8 +393,20 @@
       }
     }
 
-    const lookupItems = unscored.filter((item) => !lookedUp.has(item.id));
+    const lookupItems = lookupCandidates(page);
     if (lookupItems.length) await analyze(page, lookupItems, "lookup");
+  }
+
+  // 还没查过缓存的条目，包括别人推文的主帖。
+  function lookupCandidates(page) {
+    const items = page.mainPost ? [...page.items, page.mainPost] : page.items;
+    return items.filter((item) => !scores.has(item.id) && !lookedUp.has(item.id));
+  }
+
+  function failScan(response) {
+    if (response.needsConfig) sendToBackground({ type: "OPEN_OPTIONS" }).catch(() => {});
+    showToast(response.error || "分析失败", "error");
+    return { ok: false };
   }
 
   async function manualScan() {
@@ -404,30 +423,40 @@
 
     const noun = page.kind === "posts" ? "推文" : "回复";
     const unscored = page.items.filter((item) => !scores.has(item.id));
-    if (!unscored.length) {
+    const mainPending = Boolean(page.mainPost && !scores.has(page.mainPost.id));
+    if (!unscored.length && !mainPending) {
       showToast(page.items.length ? `本页${noun}都已分析过` : `本页没有可分析的${noun}`);
       return { ok: true };
     }
 
-    const response = await analyze(page, unscored, "manual");
-    if (!response.ok) {
-      if (response.needsConfig) sendToBackground({ type: "OPEN_OPTIONS" }).catch(() => {});
-      showToast(response.error || "分析失败", "error");
-      return { ok: false };
+    const parts = [];
+    // 详情页的主帖按推文版判断标准单独分析。
+    if (mainPending) {
+      const mainPage = { kind: "posts", context: { author: page.context.author } };
+      const response = await analyze(mainPage, [page.mainPost], "manual");
+      if (!response.ok) return failScan(response);
+      const result = scores.get(page.mainPost.id);
+      if (result) parts.push(`主帖 AI ${result.score}`);
+    }
+
+    if (unscored.length) {
+      const response = await analyze(page, unscored, "manual");
+      if (!response.ok) return failScan(response);
+      const analyzed = response.analyzed ?? response.results.length;
+      if (response.remaining) {
+        parts.push(`已分析 ${analyzed} 条，还剩 ${response.remaining} 条，再点一次继续`);
+      } else if (page.kind === "posts") {
+        const summary = profileSummary(page);
+        parts.push(`已分析 ${summary.count} 条推文，高嫌疑 ${summary.high} 条`);
+      } else {
+        parts.push(`已分析 ${analyzed} 条回复`);
+      }
     }
 
     if (autoPausedReason === "error" || autoPausedReason === "needsConfig") {
       autoPausedReason = null;
     }
-    const analyzed = response.analyzed ?? response.results.length;
-    if (response.remaining) {
-      showToast(`已分析 ${analyzed} 条，还剩 ${response.remaining} 条，再点一次继续`);
-    } else if (page.kind === "posts") {
-      const summary = profileSummary(page);
-      showToast(`已分析 ${summary.count} 条推文，高嫌疑 ${summary.high} 条`);
-    } else {
-      showToast(`已分析 ${analyzed} 条回复`);
-    }
+    showToast(parts.join("；") || "分析完成");
     return { ok: true };
   }
 
@@ -451,7 +480,19 @@
       return unscored > 0 ? `${base} · 再扫 ${unscored} 条` : base;
     }
 
-    if (!page.own) return busy ? "分析中…" : "扫描 AI 回复";
+    if (!page.own) {
+      if (busy) return "分析中…";
+      const mainResult = page.mainPost && scores.get(page.mainPost.id);
+      const scoredReplies = page.items.filter((item) => scores.has(item.id)).length;
+      const pendingReplies = page.items.length - scoredReplies;
+      if (page.mainPost && !mainResult) return "扫描主帖和回复";
+      if (!mainResult && !scoredReplies) return "扫描 AI 回复";
+      const parts = [];
+      if (mainResult) parts.push(`主帖 AI ${mainResult.score}`);
+      if (scoredReplies) parts.push(`回复已分析 ${scoredReplies} 条`);
+      if (pendingReplies) parts.push(`再扫 ${pendingReplies} 条`);
+      return parts.join(" · ");
+    }
     if (busy) return "自动检测中…";
 
     switch (autoPausedReason) {
