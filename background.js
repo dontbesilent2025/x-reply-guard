@@ -150,7 +150,7 @@ chrome.action.onClicked.addListener(async (tab) => {
     } catch (_error) {
       await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        files: ["ai-detector.js"]
+        files: ["spam-rules.js", "ai-detector.js"]
       });
       result = await sendMessage(tab.id, { type: "SCAN_REPLIES" });
     }

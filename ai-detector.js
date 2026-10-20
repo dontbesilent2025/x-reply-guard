@@ -6,6 +6,7 @@
   const SCAN_BUTTON_ID = "x-ai-scan-button";
   const TOAST_ID = "x-ai-toast";
   const STATUS_ID_PATTERN = /\/status\/(\d+)/;
+  const VERSION = chrome.runtime.getManifest?.().version || "";
   // 自己评论区：新回复最多攒 2 秒再合并成一批；查缓存不花 token，等得更短。
   const AUTO_DELAY = 2000;
   const LOOKUP_DELAY = 500;
@@ -39,8 +40,33 @@
     return permalink.match(/^\/([^/]+)\/status\/\d+/)?.[1]?.toLowerCase() || null;
   }
 
+  // 保留原始大小写，用于识别随机混排的用户名。
+  function articleAuthorRaw(article) {
+    return articlePermalink(article).match(/^\/([^/]+)\/status\/\d+/)?.[1] || null;
+  }
+
+  // X 把 emoji 渲染成 <img alt="🌸">，innerText 读不到，需要拼回去。
+  function textWithEmoji(element) {
+    if (!element) return "";
+    let text = "";
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      if (node.nodeType === Node.TEXT_NODE) text += node.data;
+      else if (node.tagName === "IMG" && node.alt) text += node.alt;
+      else if (node.tagName === "BR") text += "\n";
+    }
+    return text.trim();
+  }
+
   function articleText(article) {
-    return article.querySelector('[data-testid="tweetText"]')?.innerText.trim() || "";
+    return textWithEmoji(article.querySelector('[data-testid="tweetText"]'));
+  }
+
+  // 昵称：User-Name 区域里第一个链接（第二个是 @用户名）。
+  function articleDisplayName(article) {
+    const link = article.querySelector('[data-testid="User-Name"] a');
+    return textWithEmoji(link).split("\n")[0] || "";
   }
 
   function articleTime(article) {
@@ -152,6 +178,8 @@
       replies.push({
         id,
         author,
+        handle: articleAuthorRaw(article),
+        displayName: articleDisplayName(article),
         text,
         delaySeconds:
           parentTime && replyTime ? Math.round((replyTime - parentTime) / 1000) : null
@@ -184,7 +212,12 @@
       const id = articleStatusId(article);
       const text = articleText(article);
       if (!id || !text || articleAuthorHandle(article) !== handle) continue;
-      posts.push({ id, text });
+      posts.push({
+        id,
+        text,
+        handle: articleAuthorRaw(article),
+        displayName: articleDisplayName(article)
+      });
     }
     return posts;
   }
@@ -272,6 +305,16 @@
       badge.textContent = "AI 分析中…";
       badge.title = "";
       Object.assign(badge.style, badgeColors(0));
+      return;
+    }
+
+    if (state.spam) {
+      badge.textContent = "黄推";
+      badge.title = `黄推（本地规则识别，未调用 API）\n${state.reason}`;
+      Object.assign(badge.style, {
+        color: "#fff",
+        background: "rgb(244, 33, 46)"
+      });
       return;
     }
 
@@ -417,7 +460,7 @@
 
     const page = collectPage();
     if (!page) {
-      showToast("请打开推文详情页或某个人的主页", "error");
+      showToast(`没认出当前页面（${location.pathname}），请打开推文详情页或某个人的主页 · v${VERSION}`, "error");
       return { ok: false };
     }
 
@@ -533,6 +576,7 @@
     const button = document.createElement("button");
     button.id = SCAN_BUTTON_ID;
     button.type = "button";
+    button.title = `X 回复清理助手 v${VERSION}`;
     Object.assign(button.style, {
       position: "fixed",
       right: "24px",
@@ -565,9 +609,50 @@
     return true;
   });
 
+  // 黄推规则：本地运行，不花钱，所有详情页和主页都自动标记。
+  let spamSettings = { enabled: true, phrases: [] };
+  // 规则读取完成前不发 API 请求，避免黄推先被送去模型分析。
+  let spamReady = false;
+
+  function loadSpamSettings() {
+    chrome.storage.local.get(["spamRulesEnabled", "customSpamPhrases"], (stored) => {
+      spamSettings = {
+        enabled: stored.spamRulesEnabled !== false,
+        phrases: parseCustomPhrases(stored.customSpamPhrases)
+      };
+      spamReady = true;
+      // 规则变了，撤掉旧的黄推标记，按新规则重新判断。
+      for (const [id, result] of scores) {
+        if (result.spam) scores.delete(id);
+      }
+      document.querySelectorAll(`[${BADGE_ATTRIBUTE}]`).forEach((badge) => {
+        const article = badge.closest('article[data-testid="tweet"]');
+        if (!scores.has(articleStatusId(article))) badge.remove();
+      });
+      scheduleUpdate();
+    });
+  }
+
+  function applySpamRules() {
+    if (!spamSettings.enabled) return;
+    const page = collectPage();
+    if (!page) return;
+    let found = false;
+    for (const item of page.items) {
+      if (scores.has(item.id)) continue;
+      const result = checkSpam(item, spamSettings.phrases);
+      if (result) {
+        scores.set(item.id, { id: item.id, ...result });
+        found = true;
+      }
+    }
+    if (found) renderScoredBadges(true);
+  }
+
   // 设置改动（开关、上限、Key）后恢复自动检测。
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
+    if ("spamRulesEnabled" in changes || "customSpamPhrases" in changes) loadSpamSettings();
     // 缓存和计数的写入不算设置改动。
     const dataKeys = ["scoreCache", "autoUsage"];
     if (Object.keys(changes).some((key) => !dataKeys.includes(key))) {
@@ -583,8 +668,9 @@
     requestAnimationFrame(() => {
       scheduled = false;
       installScanButton();
+      applySpamRules();
       renderScoredBadges();
-      queueCheck();
+      if (spamReady) queueCheck();
     });
   }
 
@@ -594,5 +680,5 @@
   });
   window.addEventListener("popstate", scheduleUpdate);
   setInterval(scheduleUpdate, 1000);
-  scheduleUpdate();
+  loadSpamSettings();
 })();

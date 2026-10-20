@@ -9,7 +9,9 @@ const DEFAULTS = {
   autoScanOwn: true,
   dailyAutoLimit: 300,
   customRepliesPrompt: "",
-  customPostsPrompt: ""
+  customPostsPrompt: "",
+  spamRulesEnabled: true,
+  customSpamPhrases: ""
 };
 const LEGACY_KEYS = ["apiKey", "model", "baseUrl"];
 const PROMPT_FIELDS = { customRepliesPrompt: "replies", customPostsPrompt: "posts" };
@@ -88,6 +90,10 @@ function renderProvider() {
 function render() {
   renderProvider();
   $("autoScanOwn").checked = state.autoScanOwn !== false;
+  $("spamRulesEnabled").checked = state.spamRulesEnabled !== false;
+  $("customSpamPhrases").value = state.customSpamPhrases || "";
+  $("builtinSpam").textContent =
+    `一定判定：${SPAM_STRONG_PHRASES.join("、")}。需配合账号特征：${SPAM_WEAK_WORDS.join("、")}`;
   $("maxReplies").value = state.maxReplies;
   $("dailyAutoLimit").value = state.dailyAutoLimit;
   for (const [field, kind] of Object.entries(PROMPT_FIELDS)) {
@@ -140,6 +146,12 @@ function bindEvents() {
   $("autoScanOwn").addEventListener("change", (event) => {
     save({ autoScanOwn: event.target.checked });
   });
+  $("spamRulesEnabled").addEventListener("change", (event) => {
+    save({ spamRulesEnabled: event.target.checked });
+  });
+  $("customSpamPhrases").addEventListener("change", (event) => {
+    save({ customSpamPhrases: parseCustomPhrases(event.target.value).join("\n") });
+  });
   $("maxReplies").addEventListener("change", (event) => {
     const value = clamp(event.target.value, 1, 50, DEFAULTS.maxReplies);
     event.target.value = value;
@@ -170,6 +182,7 @@ function bindEvents() {
 }
 
 async function init() {
+  $("version").textContent = `v${chrome.runtime.getManifest().version}`;
   for (const [id, provider] of Object.entries(PROVIDERS)) {
     $("provider").append(new Option(provider.label, id));
   }

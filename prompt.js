@@ -24,12 +24,13 @@ const REPLIES_CRITERIA = `你是 X（推特）评论区的 AI 自动回复识别
 - R8 祝福结尾和过量 emoji（弱）：「加油」「你值得」，几乎每句都带 emoji
 - R9 回复过快（弱）：距原帖发出很短时间就写了一大段，输入中的 delaySeconds 是间隔秒数
 - R10 批量雷同（弱）：同一批回复里多个账号句式几乎一样
+- R11 色情引流或垃圾机器人（强）：暧昧挑逗短句、引导看主页或私聊，昵称带 🌸💕 等装饰、用户名像随机字母。这类回复即使只有几个字，也按自动发布处理
 
 ## 打分
 - 一个强信号约加 30–40 分，中信号约加 15 分，弱信号约加 5–10 分；真人特征可以扣分`;
 
 const REPLIES_OUTPUT = `## 输出格式
-- 输入是 JSON：parent 为原帖，replies 为待判断的回复，每条回复都要给出结果
+- 输入是 JSON：parent 为原帖，replies 为待判断的回复（author 为用户名，displayName 为昵称），每条回复都要给出结果
 - score 为 0–100 的整数，表示 AI 自动回复的嫌疑。0–30 像真人，31–69 可疑，70–100 高度可疑
 - signals 列出命中的信号编号，没有就给空数组
 - reason 用一句中文说明依据，引用回复里的原词，不超过 40 字
@@ -43,6 +44,7 @@ function buildUserMessage(parent, replies) {
       replies: replies.map((reply) => ({
         id: reply.id,
         author: reply.author,
+        displayName: reply.displayName || "",
         text: reply.text,
         delaySeconds: reply.delaySeconds
       }))

@@ -1,11 +1,11 @@
 {
   "name": "x-reply-guard",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "识别 X（推特）上的 AI 自动回复和 AI 生成推文，并一键隐藏或拉黑。",
   "license": "MIT",
   "scripts": {
-    "test": "node tests/run-tests.js",
+    "test": "node tests/run-tests.js && node tests/spam-rules-test.js",
     "test:live": "node tests/live-test.js"
   }
 }

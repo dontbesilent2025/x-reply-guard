@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "X 回复清理助手",
-  "version": "0.1.0",
-  "description": "识别推文下的 AI 自动回复，并一键隐藏回复、屏蔽账号。",
+  "version": "0.1.1",
+  "description": "识别 X 上的 AI 回复和 AI 推文，并一键隐藏或拉黑。",
   "permissions": [
     "activeTab",
     "scripting",
@@ -46,6 +46,7 @@
       ],
       "js": [
         "reply-cleaner.js",
+        "spam-rules.js",
         "ai-detector.js"
       ],
       "run_at": "document_idle"

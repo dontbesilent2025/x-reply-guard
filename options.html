@@ -51,7 +51,7 @@
   </style>
 </head>
 <body>
-  <h1>X 回复清理助手</h1>
+  <h1>X 回复清理助手 <small id="version" style="display:inline;font-weight:400"></small></h1>
   <p class="note">选好服务商，填上 API Key，点「测试连接」就能用了。Key 只保存在本机浏览器。</p>
 
   <label for="provider">服务商</label>
@@ -72,6 +72,17 @@
   <label class="check"><input id="autoScanOwn" type="checkbox"> 自己的评论区自动检测</label>
   <small>打开自己推文的详情页时自动分析回复。别人的评论区和个人主页点右下角按钮分析。</small>
   <small id="usage">今天已自动分析 0 条。</small>
+
+  <label class="check"><input id="spamRulesEnabled" type="checkbox"> 自动标记黄推</label>
+  <small>用本地规则识别色情引流回复，标红色「黄推」，不调用 API、不花钱。</small>
+
+  <label for="customSpamPhrases">自定义黄推语录（一行一条）</label>
+  <textarea id="customSpamPhrases" spellcheck="false" style="min-height:96px" placeholder="例如：只入身体不入生活"></textarea>
+  <small>回复里出现其中任意一条，就直接标为黄推。比对时忽略空格、标点和 emoji。</small>
+  <details style="margin-top:8px;border:0;padding:0">
+    <summary style="font-weight:400">查看内置语录</summary>
+    <small id="builtinSpam"></small>
+  </details>
 
   <span id="status"></span>
 
@@ -101,6 +112,7 @@
 
   <script src="providers.js"></script>
   <script src="prompt.js"></script>
+  <script src="spam-rules.js"></script>
   <script src="options.js"></script>
 </body>
 </html>
