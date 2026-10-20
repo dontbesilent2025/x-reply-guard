@@ -89,22 +89,53 @@
     return location.pathname.match(/^\/([A-Za-z0-9_]{1,15})\/status\/\d+/)?.[1]?.toLowerCase() || null;
   }
 
-  // 主帖和排在主帖之后、由其他账号发出的回复。
+  // 详情页 id → 主帖信息。X 会把滚出视野的推文移出页面，
+  // 往下翻评论时主帖不在 DOM 里，需要用之前记下的信息。
+  const threadMemory = new Map();
+
+  function rememberThread(mainId, mainArticle, articles) {
+    const memory = threadMemory.get(mainId) || { ancestorIds: new Set() };
+    memory.parent = {
+      author: articleAuthorHandle(mainArticle) || pathAuthorHandle(),
+      text: articleText(mainArticle)
+    };
+    memory.parentTime = articleTime(mainArticle);
+    // 排在主帖上方的是它回复的上级推文，不算回复。
+    for (const article of articles) {
+      if (article.compareDocumentPosition(mainArticle) & Node.DOCUMENT_POSITION_FOLLOWING) {
+        const id = articleStatusId(article);
+        if (id) memory.ancestorIds.add(id);
+      }
+    }
+    threadMemory.set(mainId, memory);
+    return memory;
+  }
+
+  // 主帖和主帖之后、由其他账号发出的回复。
   function collectThread() {
     const mainId = currentMainStatusId();
     if (!mainId) return null;
 
     const articles = [...document.querySelectorAll('article[data-testid="tweet"]')];
     const mainArticle = findMainArticle(articles, mainId);
-    if (!mainArticle) return null;
+    const memory = mainArticle
+      ? rememberThread(mainId, mainArticle, articles)
+      : threadMemory.get(mainId) || {
+          parent: { author: pathAuthorHandle(), text: "" },
+          parentTime: null,
+          ancestorIds: new Set()
+        };
 
     const ownHandle = loggedInHandle();
-    const parentTime = articleTime(mainArticle);
+    const parentTime = memory.parentTime;
     const replies = [];
 
     for (const article of articles) {
       if (article === mainArticle) continue;
-      if (!(mainArticle.compareDocumentPosition(article) & Node.DOCUMENT_POSITION_FOLLOWING)) {
+      if (
+        mainArticle &&
+        !(mainArticle.compareDocumentPosition(article) & Node.DOCUMENT_POSITION_FOLLOWING)
+      ) {
         continue;
       }
 
@@ -112,6 +143,7 @@
       const author = articleAuthorHandle(article);
       const text = articleText(article);
       if (!id || !author || !text || author === ownHandle) continue;
+      if (id === mainId || memory.ancestorIds.has(id)) continue;
 
       const replyTime = articleTime(article);
       replies.push({
@@ -123,13 +155,7 @@
       });
     }
 
-    return {
-      parent: {
-        author: articleAuthorHandle(mainArticle) || pathAuthorHandle(),
-        text: articleText(mainArticle)
-      },
-      replies
-    };
+    return { parent: memory.parent, replies };
   }
 
   const RESERVED_PATHS = new Set([
